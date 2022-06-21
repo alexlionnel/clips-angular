@@ -1,5 +1,8 @@
 import { Component, OnInit } from '@angular/core';
 import {ModalService} from "../services/modal.service";
+import {AuthService} from "../services/auth.service";
+import {AngularFireAuth} from "@angular/fire/compat/auth";
+import {Router} from "@angular/router";
 
 @Component({
   selector: 'app-nav',
@@ -8,10 +11,10 @@ import {ModalService} from "../services/modal.service";
 })
 export class NavComponent implements OnInit {
 
-  constructor(public modalService: ModalService) { }
+  constructor(public modalService: ModalService,
+              public auth: AuthService) {}
 
-  ngOnInit(): void {
-  }
+  ngOnInit(): void {}
 
   openModal($event: MouseEvent) {
     // pour que le navigateur ne fasse pas le comportement par défaut,
