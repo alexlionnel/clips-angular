@@ -14,6 +14,7 @@ describe('InputComponent', () => {
       }, imports: [ReactiveFormsModule]});
 
     const input = screen.getByRole('textbox', {hidden: true});
+    expect(input).toBeInTheDocument();
     userEvent.type(input, 'test de saisie');
     expect(formControl.value).toBe('test de saisie');
   });

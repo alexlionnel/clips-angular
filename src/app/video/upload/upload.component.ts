@@ -1,12 +1,14 @@
-import { Component, OnDestroy } from '@angular/core';
+import {Component, OnDestroy} from '@angular/core';
 import {FormControl, FormGroup, Validators} from "@angular/forms";
 import {AngularFireStorage, AngularFireUploadTask} from "@angular/fire/compat/storage";
 import {v4 as uuid} from "uuid";
-import {last, switchMap} from "rxjs/operators";
+import {combineLatest, forkJoin} from "rxjs";
+import {switchMap} from "rxjs/operators";
 import firebase from "firebase/compat/app";
 import {AngularFireAuth} from "@angular/fire/compat/auth";
 import {ClipService} from "../../services/clip.service";
 import {Router} from "@angular/router";
+import {FfmpegService} from "../../services/ffmpeg.service";
 
 @Component({
   selector: 'app-upload',
@@ -25,6 +27,9 @@ export class UploadComponent implements OnDestroy {
   showPercentage = false
   user: firebase.User | null = null
   task?: AngularFireUploadTask
+  screenshots: string[] = []
+  selectedScreenshot = ''
+  screenshotTask?: AngularFireUploadTask
 
   title = new FormControl('', [
     Validators.required,
@@ -37,15 +42,20 @@ export class UploadComponent implements OnDestroy {
   constructor(private storage: AngularFireStorage,
               private auth: AngularFireAuth,
               private clipsService: ClipService,
-              private router: Router) {
+              private router: Router,
+              public ffmpegService: FfmpegService) {
     auth.user.subscribe(user => this.user = user)
+    this.ffmpegService.init();
   }
 
   ngOnDestroy(): void {
     this.task?.cancel()
   }
 
-  storeFile($event: Event) {
+  async storeFile($event: Event) {
+    if (this.ffmpegService.isRunning) {
+      return
+    }
     this.isDragover = false
     this.file = ($event as DragEvent).dataTransfer ?
       ($event as DragEvent).dataTransfer?.files.item(0) ?? null
@@ -55,11 +65,14 @@ export class UploadComponent implements OnDestroy {
       return
     }
 
+    this.screenshots = await this.ffmpegService.getScreenshots(this.file)
+    this.selectedScreenshot = this.screenshots[0]
+
     this.title.setValue(this.file.name.replace(/\.[^/.]+$/, ''))
     this.nextStep = true
   }
 
-  uploadFile() {
+  async uploadFile() {
     this.uploadForm.disable()
 
     this.showAlert = true
@@ -70,25 +83,46 @@ export class UploadComponent implements OnDestroy {
 
     const clipFileName = uuid()
     const clipPath = `clips/${clipFileName}.mp4`
+    const screenshotBlob = await this.ffmpegService.blobFromURL(
+      this.selectedScreenshot
+    )
+    const screenshotPath = `screenshots/${clipFileName}.png`
 
     const clipRef = this.storage.ref(clipPath)
+    const screenshotRef = this.storage.ref(screenshotPath)
+
+    this.screenshotTask = this.storage.upload(screenshotPath, screenshotBlob)
 
     this.task = this.storage.upload(clipPath, this.file)
-    this.task.percentageChanges().subscribe(progress => {
-      this.percentage = progress as number / 100
+    combineLatest([
+      this.task.percentageChanges(),
+      this.screenshotTask.percentageChanges()
+    ]).subscribe(([clipProgress, screenshotProgress]) => {
+      if(!clipProgress || !screenshotProgress) {
+        return
+      }
+      const total = screenshotProgress + clipProgress
+      this.percentage = total / 200
     })
 
-    this.task.snapshotChanges().pipe(
-      last(),
-      switchMap(() => clipRef.getDownloadURL())
+    forkJoin([
+      this.task.snapshotChanges(),
+      this.screenshotTask.snapshotChanges()
+    ]).pipe(
+      switchMap(() => forkJoin([
+        clipRef.getDownloadURL(),
+        screenshotRef.getDownloadURL()
+      ]))
     ).subscribe({
-      next: async (url) => {
+      next: async ([clipURL, screenshotURL]) => {
         const clip = {
           uid: this.user?.uid as string,
           displayName: this.user?.displayName as string,
           title: this.title.value,
           fileName: `${clipFileName}.mp4`,
-          url,
+          url: clipURL,
+          screenshotURL,
+          screenshotFileName: `${clipFileName}.png`,
           timestamp: firebase.firestore.FieldValue.serverTimestamp()
         }
 
